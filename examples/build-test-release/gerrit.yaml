@@ -1,0 +1,64 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# =============================================================================
+# EXAMPLE: Gerrit-sourced release caller for the build-test-release workflow
+# =============================================================================
+# Use this form when Gerrit is the source of truth (SCM) for your project.
+#
+# This is Model A: the TAG-DRIVEN release model. Unlike the verify
+# workflow (which gerrit_to_platform dispatches per patchset and votes
+# on), a RELEASE is driven by a tag. For Gerrit projects the release tag
+# is pushed to Gerrit and replicated to the GitHub mirror, where it fires
+# this standard tag-push event. There is no Gerrit change context on a
+# tag, so no votes or comments are cast — this caller is therefore
+# near-identical to the GitHub-native release caller (github.yaml), and
+# release workflows are tag-triggered ONLY (no workflow_dispatch).
+#
+# REGISTRY PUBLISHING MAY NEED TO LIVE HERE, CALLER-SIDE. Registry-native
+# OIDC/trusted-publishing mechanisms (e.g. PyPI trusted publishing) match
+# the OIDC job_workflow_ref claim against THIS repository (the GitHub
+# mirror), so a reusable workflow cannot always act as the trusted
+# publisher. The reusable workflow exposes a `tag` output and leaves the
+# run-scoped build artefact in place, so caller-side publish jobs
+# (stacked after the `release` job below) have everything they need.
+# =============================================================================
+name: 'Gerrit Release'
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+    tags:
+      - '**'
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  release:
+    name: 'Build/Test/Release'
+    # Skip tag deletion events
+    if: "!github.event.deleted"
+    permissions:
+      contents: write       # Create the GitHub release / attach assets
+      id-token: write       # OIDC for build provenance attestations
+      attestations: write   # Build provenance attestations
+    # REPLACE the pinned SHA below with a workflows-template release SHA
+    # (or your instantiated workflows repository's release SHA).
+    # The all-zero SHA is a non-functional placeholder, NOT a real commit.
+    # yamllint disable-line rule:line-length
+    uses: lfreleng-actions/workflows-template/.github/workflows/build-test-release.yaml@0000000000000000000000000000000000000000  # REPLACE: vX.Y.Z
+    # All inputs are optional; uncomment to tune.
+    # with:
+    #   path_prefix: '.'
+    #   attestations: true
+    #   sigstore_sign: true
+
+# Caller-side registry publish jobs go here, stacked after the release
+# job, consuming `needs.release.outputs.tag` and the run-scoped build
+# artefact. See the python-workflows release examples for a complete
+# trusted-publishing precedent.
