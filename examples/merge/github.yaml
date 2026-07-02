@@ -1,0 +1,50 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# =============================================================================
+# EXAMPLE: Plain GitHub-native caller for the reusable merge workflow
+# =============================================================================
+# Model B (merge-driven snapshots + releases/ file-triggered releases) is
+# PRIMARILY a Gerrit pattern, generalising the Jenkins-heritage LF flow —
+# see gerrit.yaml in this directory for the canonical caller. This
+# GitHub-native variant serves projects that adopt the same model on a
+# plain GitHub repository: every push (merge) to a main branch publishes
+# a snapshot, and a merged release file under releases/ triggers a
+# release publish.
+#
+# Copy this file into your project's .github/workflows/ directory (for
+# example as merge.yaml) and adjust the `uses:` ref to suit your project.
+# =============================================================================
+name: 'Merge/Publish'
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+    branches:
+      - main
+      - master
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  merge:
+    name: 'Merge/Publish'
+    permissions:
+      contents: read
+    # REPLACE the pinned SHA below with a workflows-template release SHA
+    # (or your instantiated workflows repository's release SHA).
+    # The all-zero SHA is a non-functional placeholder, NOT a real commit.
+    # yamllint disable-line rule:line-length
+    uses: lfreleng-actions/workflows-template/.github/workflows/merge.yaml@0000000000000000000000000000000000000000  # REPLACE: vX.Y.Z
+    # All inputs are optional; uncomment to tune.
+    # with:
+    #   path_prefix: '.'              # project root (monorepo subdir, etc.)
+    #   harden_runner_egress: 'block' # 'block' (default) or 'audit'
+    secrets:
+      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      VAULT_MAPPING_JSON: ${{ secrets.VAULT_MAPPING_JSON }}

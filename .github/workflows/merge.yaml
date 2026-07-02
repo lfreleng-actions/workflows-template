@@ -1,0 +1,643 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# Reusable merge/publish pipeline SKELETON (Model B: merge-driven).
+#
+# Implements the Jenkins-heritage LF/Gerrit release model: every merge
+# publishes a snapshot (version derived from committed metadata such as
+# version.properties -> X.Y.Z-SNAPSHOT), and a release publish triggers
+# when the merged commit adds a release file under releases/:
+#   { resolve-version | build } -> snapshot-publish
+#   check-release -> release-publish (only when a release file merged)
+#
+# Steps marked "# TEMPLATE:" are placeholders. When instantiating this
+# template for a language, replace them with the real build and registry
+# publish actions; the version resolution pattern, release-file
+# detection, harden-runner wiring and dual checkout are generic.
+#
+# Call this from a thin caller workflow dispatched on Gerrit
+# change-merged events (or push-to-main for GitHub-native projects); see
+# examples/merge/ for both caller forms.
+name: '[R] Merge/Publish (Template)'
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_call:
+    inputs:
+      # --- Checkout target (defaults to the calling repository) ---
+      repository:
+        description: 'Repository to check out (owner/name)'
+        required: false
+        type: string
+        default: ''
+      ref:
+        description: 'Branch/tag/SHA to check out (empty = default branch)'
+        required: false
+        type: string
+        default: ''
+
+      # --- Project layout ---
+      path_prefix:
+        description: 'Path to the project root directory'
+        required: false
+        type: string
+        default: '.'
+
+      # --- Runner hardening ---
+      harden_runner_egress:
+        description: "Harden-runner egress policy: 'block' or 'audit'"
+        required: false
+        type: string
+        default: 'block'
+      harden_runner_allowlist:
+        description: 'Out-of-band harden-runner allow-list configuration'
+        required: false
+        type: string
+        # yamllint disable-line rule:line-length
+        default: 'lfreleng-actions//.github/harden-runner/lfreleng-actions/allow_list.txt@aa81113fe43792f29f939c79ea47a04801cf5342'  # v0.4.1
+
+      # --- Gerrit-aware checkout (empty unless dispatched via Gerrit) ---
+      gerrit_refspec:
+        description: 'Gerrit refspec of the merged change'
+        required: false
+        type: string
+        default: ''
+      gerrit_project:
+        description: 'Gerrit project name'
+        required: false
+        type: string
+        default: ''
+      gerrit_branch:
+        description: 'Gerrit target branch'
+        required: false
+        type: string
+        default: ''
+      gerrit_url:
+        description: >-
+          Gerrit server URL. Empty falls back to the GERRIT_URL repository
+          variable at runtime.
+        required: false
+        type: string
+        default: ''
+
+    secrets:
+      OP_SERVICE_ACCOUNT_TOKEN:
+        description: >-
+          1Password service-account token used by credential-load-action
+          to fetch the per-repository Nexus credential from the common
+          per-org CI/CD vault (op://<vault>/<repository-name>/password).
+          Only needed when the publish placeholder steps are replaced
+          with real Nexus registry publishing.
+        required: false
+      VAULT_MAPPING_JSON:
+        description: >-
+          JSON mapping of organisation name to 1Password vault ID, keyed
+          on github.repository_owner; consumed by credential-load-action
+          to resolve the correct vault. Only needed when the publish
+          placeholder steps are replaced with real Nexus registry
+          publishing.
+        required: false
+
+permissions: {}
+
+jobs:
+  gerrit-validate:
+    name: 'Validate Gerrit Inputs'
+    # Fails fast with a clear message when gerrit_refspec is set without
+    # the project/branch the Gerrit checkout path also requires. The
+    # build-chain root job depends on this, so invalid Gerrit inputs stop
+    # the pipeline early and cleanly. This job always runs (only the
+    # validation step is conditional), so gating dependents on it does
+    # not trip GitHub's "skipped need skips dependents" behaviour.
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 2
+    steps:
+      - name: 'Require Gerrit project, branch and URL'
+        if: inputs.gerrit_refspec != ''
+        shell: bash
+        env:
+          GERRIT_PROJECT: ${{ inputs.gerrit_project }}
+          GERRIT_BRANCH: ${{ inputs.gerrit_branch }}
+          # yamllint disable-line rule:line-length
+          GERRIT_URL: ${{ inputs.gerrit_url != '' && inputs.gerrit_url || vars.GERRIT_URL }}
+        run: |
+          # gerrit_refspec is set, so the Gerrit checkout path runs and
+          # also requires gerrit_project, gerrit_branch and a resolvable
+          # Gerrit URL (the gerrit_url input or the GERRIT_URL variable).
+          missing=''
+          if [ -z "${GERRIT_PROJECT}" ]; then
+            missing="${missing} gerrit_project"
+          fi
+          if [ -z "${GERRIT_BRANCH}" ]; then
+            missing="${missing} gerrit_branch"
+          fi
+          if [ -z "${GERRIT_URL}" ]; then
+            missing="${missing} gerrit_url/GERRIT_URL"
+          fi
+          if [ -n "${missing}" ]; then
+            echo "::error::gerrit_refspec is set but missing:${missing}"
+            exit 1
+          fi
+          echo "Gerrit inputs validated ✅"
+
+  repository-metadata:
+    name: 'Repository Metadata'
+    needs: gerrit-validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: 'Load egress allow-list (block mode)'
+        if: inputs.harden_runner_egress != 'audit'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/harden-runner-block-action@6db537b3e6d060c3287c5a3ce2c28b55b0af330d  # v0.2.1
+        with:
+          config: ${{ inputs.harden_runner_allowlist }}
+      - name: 'Harden runner (block)'
+        if: inputs.harden_runner_egress != 'audit'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
+      - name: 'Harden runner (audit)'
+        if: inputs.harden_runner_egress == 'audit'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'audit'
+
+      - name: 'Checkout Gerrit change'
+        if: inputs.gerrit_refspec != ''
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/checkout-gerrit-change-action@8523d768952d9690702b4696a8310d2a84b1be39  # v1.0.1
+        with:
+          gerrit-refspec: ${{ inputs.gerrit_refspec }}
+          gerrit-project: ${{ inputs.gerrit_project }}
+          # yamllint disable-line rule:line-length
+          gerrit-url: ${{ inputs.gerrit_url != '' && inputs.gerrit_url || vars.GERRIT_URL }}
+          delay: '0s'
+          ref: refs/heads/${{ inputs.gerrit_branch }}
+      - name: 'Checkout repository'
+        if: inputs.gerrit_refspec == ''
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: 'Gather repository metadata'
+        id: repo-metadata
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/repository-metadata-action@ceabcd987d13d7bfefd2372e01eebb0ddac45956  # v0.2.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_summary: 'true'
+          gerrit_summary: ${{ inputs.gerrit_refspec != '' }}
+          artifact_upload: 'true'
+          artifact_formats: 'json'
+
+  resolve-version:
+    name: 'Resolve Version'
+    needs: gerrit-validate
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      snapshot_version: ${{ steps.resolve.outputs.snapshot_version }}
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: 'Load egress allow-list (block mode)'
+        if: inputs.harden_runner_egress != 'audit'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/harden-runner-block-action@6db537b3e6d060c3287c5a3ce2c28b55b0af330d  # v0.2.1
+        with:
+          config: ${{ inputs.harden_runner_allowlist }}
+      - name: 'Harden runner (block)'
+        if: inputs.harden_runner_egress != 'audit'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
+      - name: 'Harden runner (audit)'
+        if: inputs.harden_runner_egress == 'audit'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'audit'
+
+      - name: 'Checkout Gerrit change'
+        if: inputs.gerrit_refspec != ''
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/checkout-gerrit-change-action@8523d768952d9690702b4696a8310d2a84b1be39  # v1.0.1
+        with:
+          gerrit-refspec: ${{ inputs.gerrit_refspec }}
+          gerrit-project: ${{ inputs.gerrit_project }}
+          # yamllint disable-line rule:line-length
+          gerrit-url: ${{ inputs.gerrit_url != '' && inputs.gerrit_url || vars.GERRIT_URL }}
+          delay: '0s'
+          ref: refs/heads/${{ inputs.gerrit_branch }}
+      - name: 'Checkout repository'
+        if: inputs.gerrit_refspec == ''
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # TEMPLATE: The version.properties pattern below is the common
+      # Jenkins-heritage version source. Replace or extend it when your
+      # projects derive versions differently (package.json, go.mod tags,
+      # explicit inputs). Never `source` version.properties — parse it
+      # instead, so a hostile file cannot execute in the job.
+      - name: 'Resolve version (placeholder)'
+        id: resolve
+        shell: bash
+        env:
+          PATH_PREFIX: ${{ inputs.path_prefix }}
+        run: |
+          # TEMPLATE: parse version.properties (major/minor/patch) into
+          # a snapshot version; fall back to a placeholder version.
+          cd "${PATH_PREFIX}"
+          if [ -f version.properties ]; then
+            major=$(grep -E '^major=' version.properties | head -n1 \
+              | sed 's/^major=//' | tr -d '[:space:]\r')
+            minor=$(grep -E '^minor=' version.properties | head -n1 \
+              | sed 's/^minor=//' | tr -d '[:space:]\r')
+            patch=$(grep -E '^patch=' version.properties | head -n1 \
+              | sed 's/^patch=//' | tr -d '[:space:]\r')
+            version="${major}.${minor}.${patch}"
+          else
+            echo "No version.properties found; using placeholder"
+            version='0.0.0'
+          fi
+          # Guard against malformed/hostile content before the value
+          # reaches $GITHUB_OUTPUT and downstream jobs; require a full
+          # X.Y.Z numeric shape (rejects 1..3, .2.3, 1.2., etc.)
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version resolved: ${version}"
+            exit 1
+          fi
+          echo "Resolved version: ${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "snapshot_version=${version}-SNAPSHOT" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: 'Build'
+    needs: gerrit-validate
+    runs-on: ubuntu-latest
+    outputs:
+      artefact_name: ${{ steps.build.outputs.artefact_name }}
+      artefact_path: ${{ steps.build.outputs.artefact_path }}
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: 'Load egress allow-list (block mode)'
+        if: inputs.harden_runner_egress != 'audit'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/harden-runner-block-action@6db537b3e6d060c3287c5a3ce2c28b55b0af330d  # v0.2.1
+        with:
+          config: ${{ inputs.harden_runner_allowlist }}
+      - name: 'Harden runner (block)'
+        if: inputs.harden_runner_egress != 'audit'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
+      - name: 'Harden runner (audit)'
+        if: inputs.harden_runner_egress == 'audit'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'audit'
+
+      - name: 'Checkout Gerrit change'
+        if: inputs.gerrit_refspec != ''
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/checkout-gerrit-change-action@8523d768952d9690702b4696a8310d2a84b1be39  # v1.0.1
+        with:
+          gerrit-refspec: ${{ inputs.gerrit_refspec }}
+          gerrit-project: ${{ inputs.gerrit_project }}
+          # yamllint disable-line rule:line-length
+          gerrit-url: ${{ inputs.gerrit_url != '' && inputs.gerrit_url || vars.GERRIT_URL }}
+          delay: '0s'
+          ref: refs/heads/${{ inputs.gerrit_branch }}
+      - name: 'Checkout repository'
+        if: inputs.gerrit_refspec == ''
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # TEMPLATE: Replace this placeholder with your language build
+      # action, keeping the step id and the artefact_name/artefact_path
+      # outputs so downstream jobs continue to work, e.g.:
+      #   - name: 'Build project'
+      #     id: build
+      #     uses: lfreleng-actions/<lang>-build-action@<SHA>  # vX.Y.Z
+      #     with:
+      #       path_prefix: ${{ inputs.path_prefix }}
+      - name: 'Build project (placeholder)'
+        id: build
+        shell: bash
+        env:
+          PATH_PREFIX: ${{ inputs.path_prefix }}
+        run: |
+          # TEMPLATE: placeholder build step; produces a trivial text
+          # artefact so the artifact plumbing can be exercised.
+          cd "${PATH_PREFIX}"
+          mkdir -p dist
+          {
+            echo "workflows-template placeholder build artefact"
+            echo "repository: ${GITHUB_REPOSITORY}"
+            echo "ref: ${GITHUB_REF}"
+            echo "sha: ${GITHUB_SHA}"
+            echo "run_id: ${GITHUB_RUN_ID}"
+          } > dist/template-artefact.txt
+          echo "artefact_name=template-build" >> "$GITHUB_OUTPUT"
+          echo "artefact_path=${PATH_PREFIX}/dist" >> "$GITHUB_OUTPUT"
+
+      - name: 'Upload build artefact'
+        # yamllint disable-line rule:line-length
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ${{ steps.build.outputs.artefact_name }}
+          path: ${{ steps.build.outputs.artefact_path }}
+          if-no-files-found: error
+
+  snapshot-publish:
+    name: 'Publish Snapshot'
+    runs-on: ubuntu-latest
+    needs:
+      - 'resolve-version'
+      - 'build'
+    # yamllint disable-line rule:line-length
+    if: ${{ !cancelled() && needs.resolve-version.result == 'success' && needs.build.result == 'success' }}
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: 'Load egress allow-list (block mode)'
+        if: inputs.harden_runner_egress != 'audit'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/harden-runner-block-action@6db537b3e6d060c3287c5a3ce2c28b55b0af330d  # v0.2.1
+        with:
+          config: ${{ inputs.harden_runner_allowlist }}
+      - name: 'Harden runner (block)'
+        if: inputs.harden_runner_egress != 'audit'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
+      - name: 'Harden runner (audit)'
+        if: inputs.harden_runner_egress == 'audit'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'audit'
+
+      - name: 'Checkout Gerrit change'
+        if: inputs.gerrit_refspec != ''
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/checkout-gerrit-change-action@8523d768952d9690702b4696a8310d2a84b1be39  # v1.0.1
+        with:
+          gerrit-refspec: ${{ inputs.gerrit_refspec }}
+          gerrit-project: ${{ inputs.gerrit_project }}
+          # yamllint disable-line rule:line-length
+          gerrit-url: ${{ inputs.gerrit_url != '' && inputs.gerrit_url || vars.GERRIT_URL }}
+          delay: '0s'
+          ref: refs/heads/${{ inputs.gerrit_branch }}
+      - name: 'Checkout repository'
+        if: inputs.gerrit_refspec == ''
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # TEMPLATE: Credential loading goes here. Use the 1Password Nexus
+      # credential model (credential-load-action, or a language wrapper
+      # such as node-create-npmrc-action with load_credential: 'true'),
+      # passing the workflow_call secrets via env, e.g.:
+      #   - name: 'Create .npmrc (snapshot registry)'
+      #     uses: lfreleng-actions/node-create-npmrc-action@<SHA>  # vX.Y.Z
+      #     with:
+      #       registry_url: 'https://nexus3.<org>.org/repository/npm.snapshot/'
+      #       load_credential: 'true'
+      #     env:
+      #       OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      #       VAULT_MAPPING_JSON: ${{ secrets.VAULT_MAPPING_JSON }}
+      - name: 'Load registry credential (placeholder)'
+        shell: bash
+        run: |
+          # TEMPLATE: placeholder; replace with credential loading
+          echo "Placeholder: registry credential loading goes here"
+
+      # TEMPLATE: Registry publish goes here (e.g. stamp the snapshot
+      # version and publish to the snapshot registry). Snapshot
+      # publishes skip release-grade signing by default but may still
+      # attest build provenance cheaply.
+      - name: 'Publish snapshot (placeholder)'
+        shell: bash
+        env:
+          # yamllint disable-line rule:line-length
+          SNAPSHOT_VERSION: ${{ needs.resolve-version.outputs.snapshot_version }}
+        run: |
+          # TEMPLATE: placeholder; replace with real registry publish
+          echo "Placeholder: would publish version ${SNAPSHOT_VERSION}"
+
+  check-release:
+    name: 'Check for Release File'
+    needs: gerrit-validate
+    runs-on: ubuntu-latest
+    outputs:
+      has_release: ${{ steps.detect.outputs.has_release }}
+      version: ${{ steps.detect.outputs.version }}
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: 'Load egress allow-list (block mode)'
+        if: inputs.harden_runner_egress != 'audit'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/harden-runner-block-action@6db537b3e6d060c3287c5a3ce2c28b55b0af330d  # v0.2.1
+        with:
+          config: ${{ inputs.harden_runner_allowlist }}
+      - name: 'Harden runner (block)'
+        if: inputs.harden_runner_egress != 'audit'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
+      - name: 'Harden runner (audit)'
+        if: inputs.harden_runner_egress == 'audit'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'audit'
+
+      # On Gerrit change-merged dispatches GERRIT_REFSPEC is the branch
+      # ref (refs/heads/<branch>), so both checkout paths land on the
+      # merged commit. The plain checkout fetches depth 2 so diff-tree
+      # can compare HEAD against its parent.
+      - name: 'Checkout Gerrit change'
+        if: inputs.gerrit_refspec != ''
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/checkout-gerrit-change-action@8523d768952d9690702b4696a8310d2a84b1be39  # v1.0.1
+        with:
+          gerrit-refspec: ${{ inputs.gerrit_refspec }}
+          gerrit-project: ${{ inputs.gerrit_project }}
+          # yamllint disable-line rule:line-length
+          gerrit-url: ${{ inputs.gerrit_url != '' && inputs.gerrit_url || vars.GERRIT_URL }}
+          delay: '0s'
+          ref: refs/heads/${{ inputs.gerrit_branch }}
+      - name: 'Checkout repository'
+        if: inputs.gerrit_refspec == ''
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      # Generic release-trigger detection (NOT a placeholder): the
+      # merged commit adds a file under releases/ carrying a
+      # "version: X.Y.Z" line; that version drives release-publish.
+      - name: 'Detect release file in merged commit'
+        id: detect
+        shell: bash
+        run: |
+          # Detect a release file added/changed by the merged commit
+          files=$(git diff-tree --no-commit-id -r HEAD --name-only \
+            -- "releases/" 2>/dev/null || true)
+          file_count=$(echo "${files}" | grep -c . || true)
+          if [ "${file_count}" -eq 0 ]; then
+            echo "No release file in merged commit"
+            echo "has_release=false" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Enforce exactly one release descriptor per merged commit;
+          # multiple files would make version selection arbitrary
+          if [ "${file_count}" -gt 1 ]; then
+            echo "::error::Multiple release files in merged commit:"
+            echo "${files}"
+            exit 1
+          fi
+          release_file="${files}"
+          if [ ! -f "${release_file}" ]; then
+            echo "Release file removed by merged commit; not a release"
+            echo "has_release=false" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Release file detected: ${release_file}"
+          version=$(grep -E '^[[:space:]]*version:' "${release_file}" \
+            | head -n1 | awk '{print $2}' | tr -d '\r' | tr -d "'\"")
+          # Guard against malformed/hostile content before the value
+          # reaches $GITHUB_OUTPUT and downstream jobs.
+          case "${version}" in
+            '' | *[!0-9A-Za-z._-]*)
+              echo "::error::Invalid or missing version in release" \
+                "file: ${release_file}"
+              exit 1
+              ;;
+          esac
+          echo "Release version: ${version}"
+          echo "has_release=true" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  release-publish:
+    name: 'Publish Release'
+    runs-on: ubuntu-latest
+    needs:
+      - 'check-release'
+      - 'build'
+    # yamllint disable-line rule:line-length
+    if: ${{ !cancelled() && needs.check-release.outputs.has_release == 'true' && needs.build.result == 'success' }}
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: 'Load egress allow-list (block mode)'
+        if: inputs.harden_runner_egress != 'audit'
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/harden-runner-block-action@6db537b3e6d060c3287c5a3ce2c28b55b0af330d  # v0.2.1
+        with:
+          config: ${{ inputs.harden_runner_allowlist }}
+      - name: 'Harden runner (block)'
+        if: inputs.harden_runner_egress != 'audit'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
+      - name: 'Harden runner (audit)'
+        if: inputs.harden_runner_egress == 'audit'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411  # v2.19.4
+        with:
+          egress-policy: 'audit'
+
+      - name: 'Checkout Gerrit change'
+        if: inputs.gerrit_refspec != ''
+        # yamllint disable-line rule:line-length
+        uses: lfreleng-actions/checkout-gerrit-change-action@8523d768952d9690702b4696a8310d2a84b1be39  # v1.0.1
+        with:
+          gerrit-refspec: ${{ inputs.gerrit_refspec }}
+          gerrit-project: ${{ inputs.gerrit_project }}
+          # yamllint disable-line rule:line-length
+          gerrit-url: ${{ inputs.gerrit_url != '' && inputs.gerrit_url || vars.GERRIT_URL }}
+          delay: '0s'
+          ref: refs/heads/${{ inputs.gerrit_branch }}
+      - name: 'Checkout repository'
+        if: inputs.gerrit_refspec == ''
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # TEMPLATE: Credential loading goes here, against the RELEASE
+      # registry this time (e.g. npm.public rather than npm.snapshot);
+      # same 1Password credential model as snapshot-publish.
+      - name: 'Load registry credential (placeholder)'
+        shell: bash
+        run: |
+          # TEMPLATE: placeholder; replace with credential loading
+          echo "Placeholder: registry credential loading goes here"
+
+      # TEMPLATE: Release publish goes here: stamp the release version
+      # from check-release, publish to the release registry, and apply
+      # full signing/attestation (Sigstore keyless + build provenance)
+      # where the platform supports it.
+      - name: 'Publish release (placeholder)'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.check-release.outputs.version }}
+        run: |
+          # TEMPLATE: placeholder; replace with real registry publish
+          echo "Placeholder: would publish version ${RELEASE_VERSION}"

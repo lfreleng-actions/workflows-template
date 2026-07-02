@@ -1,0 +1,62 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# =============================================================================
+# EXAMPLE: Plain GitHub-native caller for the build-test-release workflow
+# =============================================================================
+# Copy this file into your project's .github/workflows/ directory (for
+# example as release.yaml) and adjust the `uses:` ref and the optional
+# `with:` overrides to suit your project.
+#
+# This is Model A: the TAG-DRIVEN release model. The version comes from a
+# validated, signed semver tag; the reusable workflow builds, tests,
+# audits, attaches artefacts to a draft GitHub release and promotes it.
+#
+# REGISTRY PUBLISHING MAY NEED TO LIVE HERE, CALLER-SIDE. Registry-native
+# OIDC/trusted-publishing mechanisms (e.g. PyPI trusted publishing) match
+# the OIDC job_workflow_ref claim against THIS repository, so a reusable
+# workflow cannot always act as the trusted publisher. The reusable
+# workflow exposes a `tag` output and leaves the run-scoped build
+# artefact in place, so caller-side publish jobs (stacked after the
+# `release` job below) have everything they need.
+# =============================================================================
+name: 'Build/Test/Release'
+
+# yamllint disable-line rule:truthy
+on:
+  push:
+    tags:
+      - '**'
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  release:
+    name: 'Build/Test/Release'
+    # Skip tag deletion events
+    if: "!github.event.deleted"
+    permissions:
+      contents: write       # Create the GitHub release / attach assets
+      id-token: write       # OIDC for build provenance attestations
+      attestations: write   # Build provenance attestations
+    # REPLACE the pinned SHA below with a workflows-template release SHA
+    # (or your instantiated workflows repository's release SHA).
+    # The all-zero SHA is a non-functional placeholder, NOT a real commit.
+    # yamllint disable-line rule:line-length
+    uses: lfreleng-actions/workflows-template/.github/workflows/build-test-release.yaml@0000000000000000000000000000000000000000  # REPLACE: vX.Y.Z
+    # All inputs are optional. Uncomment and tune only what your project
+    # needs; everything else falls back to sensible defaults.
+    # with:
+    #   path_prefix: '.'              # project root (monorepo subdir, etc.)
+    #   attestations: true            # build provenance attestations
+    #   sigstore_sign: true           # Sigstore-sign build artefacts
+
+# Caller-side registry publish jobs go here, stacked after the release
+# job, consuming `needs.release.outputs.tag` and the run-scoped build
+# artefact. See the python-workflows release examples for a complete
+# trusted-publishing precedent.
