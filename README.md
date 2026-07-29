@@ -110,8 +110,7 @@ When creating a new `<lang>-workflows` repository from this template:
    [`testing.yaml`](.github/workflows/testing.yaml) so the workflows
    run end-to-end against real projects on every pull request.
 3. Update this README and all badge/link slugs (`workflows-template` →
-   your repository name), and record your design decisions in
-   [`docs/BRIEF.md`](docs/BRIEF.md).
+   your repository name).
 4. When new work talks to new/external endpoints, follow the central
    allow-list process: raise a PR against `lfreleng-actions/.github`
    adding the hosts/ports to the org harden-runner allow-list, get it
@@ -140,13 +139,6 @@ different languages by calling it via its local path. The placeholder
 steps are language-agnostic, so the self-test validates the generic
 scaffolding regardless of project language — which is the point of this
 repository.
-
-## Design
-
-See [`docs/BRIEF.md`](docs/BRIEF.md) for the design decisions behind the
-template: what stays generic versus placeholder, the three skeleton
-contracts, the dual release-model rationale and the instantiation
-checklist.
 
 [pre-commit.ci results page]: https://results.pre-commit.ci/latest/github/lfreleng-actions/workflows-template/main
 [pre-commit.ci status badge]: https://results.pre-commit.ci/badge/github/lfreleng-actions/workflows-template/main.svg
