@@ -36,6 +36,115 @@ concurrency:
 permissions: {}
 
 jobs:
+  # Every checkout in a reusable workflow must name the repository it
+  # targets. The Gerrit checkout action defaults 'repository' to
+  # github.repository, which inside a reusable workflow names the
+  # CALLER, not the project under review. A central .github repository
+  # acting for another project then seeds the tree from itself. That
+  # broke every ONAP documentation check after the docs-workflows
+  # migration landed, so guard the shape here rather than trusting
+  # review to spot a missing line in a 900-line workflow.
+  checkout-targets:
+    name: 'Checkout Targets'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - name: 'Harden runner'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40  # v2.20.1
+        with:
+          egress-policy: 'audit'
+
+      - name: 'Checkout repository'
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 'Every checkout names a repository'
+        shell: bash
+        run: |
+          # Every checkout in a reusable workflow names a repository
+          python3 - <<'GUARD'
+          import pathlib, re, sys
+
+          CHECKOUT = re.compile(
+              r"uses:\s*(?:actions/checkout"
+              r"|[\w-]+/checkout-gerrit-change-action)@")
+          GERRIT = re.compile(r"uses:\s*[\w-]+/checkout-gerrit-change-action@")
+          REUSABLE = re.compile(r"^\s{2}workflow_call:", re.M)
+          DECLARES = re.compile(r"^\s{6}repository:", re.M)
+          NAMES = re.compile(r"^\s+repository:", re.M)
+          REF = re.compile(r"^\s+ref:", re.M)
+
+          def nested(text, key):
+              # Return the mapping nested under 'key', so a match cannot
+              # come from a sibling such as 'env'. A checkout that sets
+              # env.repository would otherwise satisfy the guard while
+              # with.repository stayed absent.
+              lines = text.splitlines()
+              for index, line in enumerate(lines):
+                  if not re.match(r"^\s+%s:\s*$" % key, line):
+                      continue
+                  width = len(line) - len(line.lstrip())
+                  body = []
+                  for entry in lines[index + 1:]:
+                      stripped = entry.strip()
+                      if stripped and not stripped.startswith("#"):
+                          if len(entry) - len(entry.lstrip()) <= width:
+                              break
+                      body.append(entry)
+                  return "\n".join(body)
+              return ""
+
+          def block(lines, index):
+              start = index
+              while start and not lines[start].lstrip().startswith("- "):
+                  start -= 1
+              width = len(lines[start]) - len(lines[start].lstrip())
+              end = start + 1
+              while end < len(lines):
+                  body = lines[end].strip()
+                  if body and not body.startswith("#"):
+                      if len(lines[end]) - len(lines[end].lstrip()) <= width:
+                          break
+                  end += 1
+              return "\n".join(lines[start:end])
+
+          hint = "$" + "{{ inputs.repository || github.repository }}"
+          fix = "repository: " + hint
+          failures = checked = 0
+
+          for wf in sorted(pathlib.Path(".github/workflows").glob("*.y*ml")):
+              text = wf.read_text(encoding="utf-8")
+              if not REUSABLE.search(text):
+                  continue
+              declares = DECLARES.search(text) is not None
+              lines = text.splitlines()
+              checked += 1
+              for number, line in enumerate(lines):
+                  if not CHECKOUT.search(line):
+                      continue
+                  supplied = nested(block(lines, number), "with")
+                  if NAMES.search(supplied):
+                      continue
+                  if declares:
+                      why = "the workflow declares a 'repository' input"
+                  elif GERRIT.search(line) and REF.search(supplied):
+                      why = "this Gerrit checkout pins 'ref'"
+                  else:
+                      continue
+                  print(f"::error file={wf},line={number + 1}::Checkout does "
+                        f"not name a repository, but {why}. Add: {fix}")
+                  failures += 1
+
+          print(f"Checked {checked} reusable workflow(s); "
+                f"{failures} problem(s).")
+          sys.exit(1 if failures else 0)
+          GUARD
+
   # Fixture repositories of different languages, fanned out in parallel
   # via a matrix; the template placeholders run identically for both.
   build-test:
