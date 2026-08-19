@@ -38,6 +38,16 @@ concurrency:
 
 permissions: {}
 
+# Turn off GitHub CLI telemetry for any caller-side job below. Shelling
+# out to 'gh' otherwise POSTs usage events to cafe.github.com, which no
+# release step needs; under an egress allow-list the attempt surfaces as
+# a blocked connection and buries real findings in noise. This does not
+# cross the workflow_call boundary, so the reusable workflow sets the
+# same variable for its own jobs. GH_TELEMETRY takes precedence over
+# DO_NOT_TRACK, so this single variable covers both.
+env:
+  GH_TELEMETRY: 'false'
+
 jobs:
   release:
     name: 'Build/Test/Release'

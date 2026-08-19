@@ -97,6 +97,37 @@ All inputs are optional and default to the canonical behaviour; see the
 `inputs:` block at the top of each workflow file for the full,
 documented list.
 
+## GitHub CLI telemetry
+
+The release skeleton shells out to `gh`, which posts usage events to
+`cafe.github.com` unless told otherwise. The reusable workflow and the
+`build-test-release` caller examples both set:
+
+```yaml
+env:
+  GH_TELEMETRY: 'false'
+```
+
+Three reasons this matters here:
+
+- No step needs that endpoint. The GitHub CLI sends telemetry from a
+  separate hidden `gh send-telemetry` subcommand on a two-second
+  timeout, so disabling it leaves every `gh` command working as normal.
+- The organisation runs harden-runner under `egress-policy: block`, so
+  an unnecessary call shows up as a blocked connection. That noise
+  competes with genuine findings in the run insights.
+- Adding `cafe.github.com` to the shared allow-list instead would widen
+  egress across every repository in the organisation to carry
+  analytics. Disabling the call at source keeps that policy tight.
+
+`GH_TELEMETRY` takes precedence over `DO_NOT_TRACK`, so this one
+variable covers both. A workflow-level `env:` block does not cross the
+`workflow_call` boundary, which is why the reusable workflow and the
+caller examples each set it.
+
+Any caller-side job stacked after the release job — a registry publish
+step, for instance — inherits the value from the caller workflow.
+
 ## How to instantiate this template
 
 When creating a new `<lang>-workflows` repository from this template:

@@ -138,6 +138,15 @@ on:
 
 permissions: {}
 
+# Turn off GitHub CLI telemetry for every job in this workflow. The
+# release steps shell out to 'gh', which otherwise POSTs usage events to
+# cafe.github.com. No step here needs that endpoint, and under the org
+# harden-runner egress allow-list the attempt surfaces as a blocked
+# connection, burying real findings in noise. GH_TELEMETRY takes
+# precedence over DO_NOT_TRACK, so this single variable covers both.
+env:
+  GH_TELEMETRY: 'false'
+
 jobs:
   gerrit-validate:
     name: 'Validate Gerrit Inputs'
