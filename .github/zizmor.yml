@@ -1,0 +1,42 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# Configuration for zizmor (https://docs.zizmor.sh).
+#
+# The pre-commit hook deliberately widens zizmor's file scope to cover
+# examples/ as well as .github/workflows. The example callers are real
+# workflow files that consumers copy verbatim, so they warrant the same
+# audit as the workflows they call. Note that a zizmor *directory* scan
+# collects only .github/workflows and .github/dependabot.yml and never
+# descends into examples/, so passing explicit paths -- which pre-commit
+# does -- is the only way to audit them.
+
+rules:
+  impostor-commit:
+    ignore:
+      # The example callers pin an all-zero placeholder SHA. That SHA
+      # cannot resolve, by design: it fails loudly and forces the reader
+      # to substitute a real release SHA, rather than silently tracking
+      # a mutable ref. zizmor reports it as an impostor commit, which is
+      # accurate but not actionable here.
+      #
+      # This entry is inert under the pre-commit hook, which pins
+      # zizmor to --offline; impostor-commit needs the GitHub API and
+      # does not run in that mode. It applies to online runs -- a
+      # developer invoking zizmor directly with a token, or a future CI
+      # lane -- which would otherwise report six findings on files that
+      # are correct as they stand.
+      #
+      # Configured here rather than as an inline 'zizmor: ignore'
+      # comment on purpose. Consumers copy these files wholesale, and an
+      # inline suppression would travel with them, masking a genuine
+      # impostor-commit finding in their repository once they replace
+      # the placeholder with a real SHA.
+      #
+      # Ignore rules match on BASE FILENAME, not path, so these two
+      # entries cover every examples/*/{gerrit,github}.yaml. No workflow
+      # under .github/workflows carries either name -- keep it that way,
+      # or these entries would begin masking real findings there.
+      - gerrit.yaml
+      - github.yaml
