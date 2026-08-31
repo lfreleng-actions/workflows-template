@@ -115,8 +115,8 @@ on:
         description: >-
           Generate build provenance attestations. Placeholder wiring in
           this template: pass it to your build action (or enable the
-          commented attest-build-provenance example in the build job)
-          when instantiating. Keep it toggleable for air-gapped or
+          commented actions/attest example in the build job) when
+          instantiating. Keep it toggleable for air-gapped or
           Gerrit-mirrored consumers that cannot reach Sigstore.
         required: false
         type: boolean
@@ -411,11 +411,26 @@ jobs:
       # itself, uncomment this step to generate SLSA build provenance
       # for real artefacts (verifiable with `gh attestation verify`).
       # It ships commented out because attesting the trivial placeholder
-      # artefact provides no value:
+      # artefact provides no value.
+      #
+      # Use actions/attest, not actions/attest-build-provenance: as of
+      # v4 the latter is a thin wrapper that forwards its inputs to the
+      # former, and GitHub directs new implementations at actions/attest
+      # directly. With no predicate supplied it emits SLSA build
+      # provenance by default, so the step stays this short.
+      #
+      # The wrapper is not quite empty: it also sets NODE_OPTIONS to
+      # raise node's 16KB header limit, which overflows when pushing
+      # attestations to some OCI registries. Nothing below pushes to a
+      # registry, but if you add `push-to-registry: true`, carry the
+      # setting across yourself:
+      #     env:
+      #       NODE_OPTIONS: '--max-http-header-size=32768'
+      #
       #   - name: 'Attest build provenance'
       #     if: inputs.attestations
       # yamllint disable-line rule:line-length
-      #     uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+      #     uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
       #     with:
       #       subject-path: 'dist/*'
 
