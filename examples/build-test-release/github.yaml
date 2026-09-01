@@ -54,6 +54,7 @@ jobs:
       contents: write       # Create the GitHub release / attach assets
       id-token: write       # OIDC for build provenance attestations
       attestations: write   # Build provenance attestations
+      issues: read          # Grype scan reads approved CVE bypass issues
     # REPLACE the pinned SHA below with a workflows-template release SHA
     # (or your instantiated workflows repository's release SHA).
     # The all-zero SHA is a non-functional placeholder, NOT a real commit.
@@ -65,6 +66,9 @@ jobs:
     #   path_prefix: '.'              # project root (monorepo subdir, etc.)
     #   attestations: true            # build provenance attestations
     #   sigstore_sign: true           # Sigstore-sign build artefacts
+    #   audit_enabled: true           # false skips the dependency audit
+    #   sbom_enabled: true            # false skips SBOM generation
+    #   grype_enabled: true           # false skips the Grype scan only
 
 # Caller-side registry publish jobs go here, stacked after the release
 # job, consuming `needs.release.outputs.tag` and the run-scoped build
