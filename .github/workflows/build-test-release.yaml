@@ -639,7 +639,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      issues: read  # Read maintainer-approved CVE bypass issues
     steps:
       - name: 'Load egress allow-list'
         # yamllint disable-line rule:line-length
