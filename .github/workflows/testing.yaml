@@ -9,8 +9,11 @@
 # build/test/audit/SBOM steps are language-agnostic, so the matrix runs
 # against fixtures of different languages by design.
 #
-# The reusable workflows are referenced by LOCAL path so this always
-# validates the current branch's workflows.
+# The reusable workflows are referenced with the self-repository
+# form ('$/'), which resolves this repository at the commit already
+# running. The workflows under test are therefore always the ones
+# this branch defines, independently of what any checkout puts in
+# the workspace.
 #
 # The build-test-release and merge skeletons are NOT self-tested here:
 # build-test-release requires a signed semver tag-push context (and
@@ -158,6 +161,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read  # repository-metadata-action queries PR data
-    uses: ./.github/workflows/build-test.yaml
+    uses: $/.github/workflows/build-test.yaml
     with:
       repository: ${{ matrix.repository }}

@@ -166,7 +166,9 @@ inside the reusable workflows.
 
 [`.github/workflows/testing.yaml`](.github/workflows/testing.yaml)
 exercises the build-test skeleton against fixture repositories of
-different languages by calling it via its local path. The placeholder
+different languages, calling it by self-repository path
+(`uses: $/.github/workflows/build-test.yaml`), which resolves this
+repository at the commit already running. The placeholder
 steps are language-agnostic, so the self-test validates the generic
 scaffolding regardless of project language — which is the point of this
 repository.
