@@ -203,11 +203,14 @@ repository and nowhere else.
 
 ### A list in another organisation
 
-A supplemental list from any other organisation must carry a pin,
-`<org>//<path>@<commit SHA>`, and `harden_runner_supplemental_unpinned`
-stays `false`. The action refuses to follow another organisation's
-default branch: a push there would otherwise change what your runners
-may reach.
+A supplemental list from any other organisation must carry a ref,
+and `harden_runner_supplemental_unpinned` stays `false`. The action
+refuses a cross-organisation list that names no ref (or `@HEAD`),
+which is what following the default branch means in its grammar. It
+does not judge the ref itself: `<org>//<path>@main` passes the check
+and moves with that branch. Pin a commit SHA,
+`<org>//<path>@<commit SHA>`, so that a push to the other
+organisation's repository cannot change what your runners may reach.
 
 ### A missing list fails the job
 
@@ -294,10 +297,13 @@ different languages, calling it by self-repository path
 repository at the commit already running. The placeholder
 steps are language-agnostic, so the self-test validates the generic
 scaffolding regardless of project language — which is the point of this
-repository. The legs also pass a same-organisation supplemental list,
-unpinned, and an inline endpoint the organisation list already
-carries, so the allow-list inputs run on every pull request without
-granting anything new.
+repository. The matrix legs run on the pinned baseline alone, so they
+keep proving the default policy. A further leg sets the allow-list
+inputs on one fixture: the organisation's own list as an unpinned
+supplemental list, and an inline endpoint that list already carries.
+The supplemental list follows `lfreleng-actions/.github` at its
+default branch, so that leg may allow hosts the pinned baseline does
+not yet; it proves the inputs reach the action, not the baseline.
 
 [pre-commit.ci results page]: https://results.pre-commit.ci/latest/github/lfreleng-actions/workflows-template/main
 [pre-commit.ci status badge]: https://results.pre-commit.ci/badge/github/lfreleng-actions/workflows-template/main.svg

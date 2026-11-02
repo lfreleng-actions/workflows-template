@@ -173,4 +173,4 @@ repos:
         additional_dependencies: ['pyyaml==6.0.2']
         pass_filenames: false
         # yamllint disable-line rule:line-length
-        files: '^(\.github/workflows/[^/]+\.yaml|tests/test-harden-runner-inputs\.sh)$'
+        files: '^(\.github/workflows/[^/]+\.ya?ml|tests/test-harden-runner-inputs\.sh)$'

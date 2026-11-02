@@ -164,11 +164,24 @@ jobs:
     uses: $/.github/workflows/build-test.yaml
     with:
       repository: ${{ matrix.repository }}
-      # Exercise the allow-list inputs without granting anything new.
-      # A same-organisation list may follow its default branch, and
-      # 'lfreleng-actions//' resolves to the organisation list itself,
-      # which de-duplication absorbs. The organisation list already
-      # carries github.com:443, so the action reports it as redundant.
+
+  # The build-test skeleton with the allow-list inputs set, on one
+  # fixture. The matrix above runs on the pinned baseline alone and
+  # keeps proving the default policy; this leg proves the three inputs
+  # reach the action. 'lfreleng-actions//' is the calling
+  # organisation's own list, so the action allows it unpinned. It
+  # follows lfreleng-actions/.github at its default branch, which can
+  # carry hosts the pinned baseline does not yet, so the merged list is
+  # the union of the two rather than the baseline again. 'github.com:443'
+  # is on both lists, so the action reports it as redundant.
+  build-test-allowlist:
+    name: 'Build/Test (allow-list inputs)'
+    permissions:
+      contents: read
+      pull-requests: read  # repository-metadata-action queries PR data
+    uses: $/.github/workflows/build-test.yaml
+    with:
+      repository: 'lfreleng-actions/test-go-project'
       harden_runner_supplemental_allowlist: 'lfreleng-actions//'
       harden_runner_supplemental_unpinned: true
       harden_runner_extra_endpoints: 'github.com:443'
