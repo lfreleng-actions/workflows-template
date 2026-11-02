@@ -30,6 +30,9 @@ reference implementation of these patterns.
 
 <!-- markdownlint-enable MD013 -->
 
+All three take the same five `harden_runner_*` inputs, which
+[Egress allow-list](#egress-allow-list) describes.
+
 Each pipeline runs a `repository-metadata` job in parallel (an
 informational step that does not gate the build). After `build`, the
 test, audit and SBOM/Grype branches run in parallel - none gates
@@ -128,6 +131,123 @@ caller examples each set it.
 Any caller-side job stacked after the release job — a registry publish
 step, for instance — inherits the value from the caller workflow.
 
+## Egress allow-list
+
+Every job in the three skeletons loads its egress allow-list through
+[`harden-runner-block-action`](https://github.com/lfreleng-actions/harden-runner-block-action)
+and then runs harden-runner on it. The skeletons take the same five
+inputs for this and pass them to every block-action step they run.
+A repository instantiated from this template keeps the whole set:
+every `*-workflows` repository in the organisation exposes it, so a
+caller can move between them without relearning the inputs.
+
+<!-- markdownlint-disable MD013 -->
+
+| Input                                  | Type      | Default                       | Passed to block-action as                                    |
+| -------------------------------------- | --------- | ----------------------------- | ------------------------------------------------------------ |
+| `harden_runner_egress`                 | `string`  | `block`                       | harden-runner's `egress-policy`                              |
+| `harden_runner_allowlist`              | `string`  | the organisation list, pinned | `config`                                                     |
+| `harden_runner_supplemental_allowlist` | `string`  | `''`                          | `supplemental_config`, with `supplemental_required` when set |
+| `harden_runner_supplemental_unpinned`  | `boolean` | `false`                       | `supplemental_unpinned`                                      |
+| `harden_runner_extra_endpoints`        | `string`  | `''`                          | `extra_endpoints`                                            |
+
+<!-- markdownlint-enable MD013 -->
+
+[`tests/test-harden-runner-inputs.sh`](tests/test-harden-runner-inputs.sh)
+fails when a workflow drops one of these inputs, changes its type,
+default or description, passes it in another form, or lets a
+block-action step carry on past a missing named list. It names
+nothing specific to this repository, so an instantiated repository
+keeps it unchanged; the `harden-runner-inputs` hook in
+`.pre-commit-config.yaml` runs it whenever a workflow changes.
+
+### A supplemental list of your own organisation
+
+The organisation list covers the hosts every project needs. A project
+that reaches hosts of its own, such as ONAP's `registry.nordix.org`,
+names a supplemental list, which the action merges with the baseline
+in the same coordinate grammar. An organisation that keeps its list in
+its own `.github` repository can follow it at the default branch
+rather than a pinned commit, so a host added there takes effect on the
+next run without a pin bump in every caller:
+
+```yaml
+    with:
+      harden_runner_supplemental_allowlist: 'onap//'
+      harden_runner_supplemental_unpinned: true
+```
+
+`onap//` names the `onap` organisation's `.github` repository with no
+file path, so the action searches that repository, at its default
+branch, for the organisation's list. From an `onap` repository it
+tries these files in order, and the first that exists wins:
+
+1. `.github/harden-runner/onap/allow_list.txt`, the organisation's
+   own list;
+2. `.github/harden-runner/allow_list.txt`, the repository-wide
+   default;
+3. `.github/harden-runner/<org>/allow_list.txt`, when a single
+   organisation directory carries that file (the sole-org fallback;
+   two or more such directories match nothing).
+
+Putting the list at the first path keeps the search unambiguous. When
+none of the three exists, the job fails, because the workflows require
+a supplemental list a caller names (see
+[A missing list fails the job](#a-missing-list-fails-the-job)). The
+*Search / fallback chain* section of the action's README describes the
+search in full.
+
+The action allows an unpinned list from the caller's own
+organisation alone, so `onap//` unpinned works from an `onap`
+repository and nowhere else.
+
+### A list in another organisation
+
+A supplemental list from any other organisation must carry a ref,
+and `harden_runner_supplemental_unpinned` stays `false`. The action
+refuses a cross-organisation list that names no ref (or `@HEAD`),
+which is what following the default branch means in its grammar. It
+does not judge the ref itself: `<org>//<path>@main` passes the check
+and moves with that branch. Pin a commit SHA,
+`<org>//<path>@<commit SHA>`, so that a push to the other
+organisation's repository cannot change what your runners may reach.
+
+### A missing list fails the job
+
+Whenever a caller names `harden_runner_supplemental_allowlist`, the
+workflows also pass `supplemental_required: 'true'`. A caller naming a
+list depends on it, so a list the action cannot find fails the job at
+the block-action step, before anything runs, rather than at the first
+blocked connection. This holds under `harden_runner_egress: audit`
+too: no block-action step in the skeletons tolerates its own failure.
+
+### Inline endpoints, a short-term fix
+
+`harden_runner_extra_endpoints` adds `host:port` endpoints to the
+allow-list inline, for example while a supplemental list waits for a
+review:
+
+```yaml
+    with:
+      harden_runner_extra_endpoints: 'registry.nordix.org:443'
+```
+
+Treat it as a stopgap. Endpoints passed inline live in one caller, so
+every other caller that needs the host fails until it copies them;
+the lasting fix is to add the host to the organisation's list or to a
+supplemental list. The action validates the endpoints before it
+fetches anything, and reports any the list already carries as
+redundant. The *Inline extra endpoints* section of the action's README
+gives the accepted format.
+
+### Audit trail for an unpinned list
+
+An unpinned list can change between two runs of the same commit.
+`harden-runner-block-action` records which list it read and the
+commit it resolved in its `supplemental_source` and `supplemental_sha`
+outputs, which together say which revision of the list a given run
+allowed.
+
 ## How to instantiate this template
 
 When creating a new `<lang>-workflows` repository from this template:
@@ -146,8 +266,14 @@ When creating a new `<lang>-workflows` repository from this template:
    allow-list process: raise a PR against `lfreleng-actions/.github`
    adding the hosts/ports to the org harden-runner allow-list, get it
    released, then pin the new tag's commit SHA in the
-   `harden_runner_allowlist` defaults. Reserve `harden_runner_egress:
-   'audit'` for bring-up/endpoint discovery.
+   `harden_runner_allowlist` defaults. Hosts that one project alone
+   needs belong in that project's supplemental list, and
+   `harden_runner_extra_endpoints` covers the wait for either change
+   to land; see [Egress allow-list](#egress-allow-list). Reserve
+   `harden_runner_egress: 'audit'` for bring-up/endpoint discovery.
+   Keep the five `harden_runner_*` inputs and
+   `tests/test-harden-runner-inputs.sh` as they are, so the check
+   stays the same across the organisation.
 5. Keep support for **both** release models (Model A and Model B),
    factoring version resolution so the two share building blocks.
 6. Update the `examples/` callers to reference your repository and its
@@ -171,7 +297,13 @@ different languages, calling it by self-repository path
 repository at the commit already running. The placeholder
 steps are language-agnostic, so the self-test validates the generic
 scaffolding regardless of project language — which is the point of this
-repository.
+repository. The matrix legs run on the pinned baseline alone, so they
+keep proving the default policy. A further leg sets the allow-list
+inputs on one fixture: the organisation's own list as an unpinned
+supplemental list, and an inline endpoint that list already carries.
+The supplemental list follows `lfreleng-actions/.github` at its
+default branch, so that leg may allow hosts the pinned baseline does
+not yet; it proves the inputs reach the action, not the baseline.
 
 [pre-commit.ci results page]: https://results.pre-commit.ci/latest/github/lfreleng-actions/workflows-template/main
 [pre-commit.ci status badge]: https://results.pre-commit.ci/badge/github/lfreleng-actions/workflows-template/main.svg
