@@ -50,8 +50,8 @@ import tempfile
 import yaml
 
 ACTION = "lfreleng-actions/harden-runner-block-action"
-# v0.15.0, the first release with extra_endpoints.
-PIN = "2fed66c9c36c4687c31ca349b925b81ec629673f"
+# v0.16.1; extra_endpoints arrived in v0.15.0.
+PIN = "36a02f4a61b27e7a0a91e1df2134abe9545cf54e"
 
 # name -> (type, required default; None accepts any non-empty value)
 INPUTS = {
