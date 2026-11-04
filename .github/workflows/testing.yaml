@@ -150,20 +150,27 @@ jobs:
 
   # Fixture repositories of different languages, fanned out in parallel
   # via a matrix; the template placeholders run identically for both.
+  # Each call of build-test.yaml in this run passes its own
+  # artifact_suffix: without one, the calls upload their build, SBOM
+  # and Grype artefacts under the same names. The Grype job binds to
+  # its own SBOM by artefact ID regardless.
   build-test:
-    name: 'Build/Test'
+    name: 'Build/Test (${{ matrix.name }})'
     strategy:
       fail-fast: false
       matrix:
-        repository:
-          - 'lfreleng-actions/test-go-project'
-          - 'lfreleng-actions/test-node-project'
+        include:
+          - name: 'test-go-project'
+            repository: 'lfreleng-actions/test-go-project'
+          - name: 'test-node-project'
+            repository: 'lfreleng-actions/test-node-project'
     permissions:
       contents: read
       pull-requests: read  # repository-metadata-action queries PR data
     uses: $/.github/workflows/build-test.yaml
     with:
       repository: ${{ matrix.repository }}
+      artifact_suffix: ${{ matrix.name }}
 
   # The build-test skeleton with the allow-list inputs set, on one
   # fixture. The matrix above runs on the pinned baseline alone and
@@ -182,6 +189,7 @@ jobs:
     uses: $/.github/workflows/build-test.yaml
     with:
       repository: 'lfreleng-actions/test-go-project'
+      artifact_suffix: 'allowlist'
       harden_runner_supplemental_allowlist: 'lfreleng-actions//'
       harden_runner_supplemental_unpinned: true
       harden_runner_extra_endpoints: 'github.com:443'
