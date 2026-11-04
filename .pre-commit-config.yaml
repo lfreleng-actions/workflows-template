@@ -174,3 +174,18 @@ repos:
         pass_filenames: false
         # yamllint disable-line rule:line-length
         files: '^(\.github/workflows/[^/]+\.ya?ml|tests/test-harden-runner-inputs\.sh)$'
+
+  # Artefact naming check: the build-test skeletons suffix every
+  # per-call artefact with artifact_suffix, each grype job downloads its
+  # own SBOM by artefact ID, and testing.yaml gives every call a
+  # distinct suffix.
+  - repo: local
+    hooks:
+      - id: artifact-suffix
+        name: Artefact suffix wiring check
+        entry: bash tests/test-artifact-suffix.sh
+        language: python
+        additional_dependencies: ['pyyaml==6.0.2']
+        pass_filenames: false
+        # yamllint disable-line rule:line-length
+        files: '^(\.github/workflows/[^/]+\.ya?ml|tests/test-artifact-suffix\.sh)$'

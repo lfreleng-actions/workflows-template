@@ -100,6 +100,45 @@ All inputs are optional and default to the canonical behaviour; see the
 `inputs:` block at the top of each workflow file for the full,
 documented list.
 
+## Artefact names
+
+`build-test.yaml` and `build-test-release.yaml` take an
+`artifact_suffix` input (default `''`). When set, the workflow appends
+it after a hyphen to the names of the artefacts each call uploads: the
+build artefact, `sbom-files` and `grype-scan-results`. Letters, digits,
+`.`, `_` and `-` pass; the workflow's input checks reject anything
+else. Left empty, the names stay unsuffixed, as before.
+
+Set a distinct suffix on each call when a caller runs one of these
+workflows more than once in a single workflow run, such as from a
+matrix, so each call's artefacts stay apart:
+
+```yaml
+jobs:
+  build-test:
+    strategy:
+      matrix:
+        include:
+          - name: 'service-a'
+            path_prefix: 'service-a'
+          - name: 'service-b'
+            path_prefix: 'service-b'
+    uses: <org>/<lang>-workflows/.github/workflows/build-test.yaml@<SHA>
+    with:
+      path_prefix: ${{ matrix.path_prefix }}
+      artifact_suffix: ${{ matrix.name }}
+```
+
+The Grype job never scans another call's SBOM, suffix or not: the
+SBOM job exports the ID of the artefact it uploaded, and the Grype job
+downloads that artefact by ID, never by name. `download-artifact`
+matches the ID against the newest artefact of each name, though, so
+when two calls share a name and the later one has already uploaded its
+SBOM, the earlier call's Grype job fails with an error instead of
+scanning. The suffix is what lets every call in a run succeed.
+[`tests/test-artifact-suffix.sh`](tests/test-artifact-suffix.sh)
+checks this wiring; keep it when instantiating the template.
+
 ## GitHub CLI telemetry
 
 The release skeleton shells out to `gh`, which posts usage events to
@@ -304,6 +343,8 @@ supplemental list, and an inline endpoint that list already carries.
 The supplemental list follows `lfreleng-actions/.github` at its
 default branch, so that leg may allow hosts the pinned baseline does
 not yet; it proves the inputs reach the action, not the baseline.
+Each of the three calls passes its own `artifact_suffix`, so the run
+keeps every call's build, SBOM and Grype artefacts apart.
 
 [pre-commit.ci results page]: https://results.pre-commit.ci/latest/github/lfreleng-actions/workflows-template/main
 [pre-commit.ci status badge]: https://results.pre-commit.ci/badge/github/lfreleng-actions/workflows-template/main.svg

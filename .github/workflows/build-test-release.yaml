@@ -98,6 +98,18 @@ on:
         type: boolean
         default: false
 
+      # --- Artefact naming ---
+      artifact_suffix:
+        description: >-
+          Suffix appended, after a hyphen, to the names of the build,
+          SBOM and Grype artefacts this workflow uploads. Set a
+          distinct value on each call when a caller runs this workflow
+          more than once in one run (a matrix). Letters, digits, '.',
+          '_' and '-' only; empty keeps the unsuffixed names.
+        required: false
+        type: string
+        default: ''
+
       # --- Runner hardening ---
       harden_runner_egress:
         description: "Harden-runner egress policy: 'block' or 'audit'"
@@ -193,22 +205,45 @@ permissions: {}
 # harden-runner egress allow-list the attempt surfaces as a blocked
 # connection, burying real findings in noise. GH_TELEMETRY takes
 # precedence over DO_NOT_TRACK, so this single variable covers both.
+#
+# ARTIFACT_SUFFIX is the suffix for the names of the artefacts each
+# call uploads: '-<artifact_suffix>', or empty when the input is unset
+# so the artefact names stay as they were. Every upload and download
+# of a per-call artefact appends it; tests/test-artifact-suffix.sh
+# checks each site.
 env:
   GH_TELEMETRY: 'false'
+  # yamllint disable-line rule:line-length
+  ARTIFACT_SUFFIX: ${{ inputs.artifact_suffix != '' && format('-{0}', inputs.artifact_suffix) || '' }}
 
 jobs:
   gerrit-validate:
-    name: 'Validate Gerrit Inputs'
-    # Fails fast with a clear message when gerrit_refspec is set without
-    # the project/branch the Gerrit checkout path also requires. The
-    # build-chain root job depends on this, so invalid Gerrit inputs stop
-    # the pipeline early and cleanly. This job always runs (only the
-    # validation step is conditional), so gating dependents on it does
-    # not trip GitHub's "skipped need skips dependents" behaviour.
+    name: 'Validate Workflow Inputs'
+    # Fails fast with a clear message on a malformed artifact_suffix, or
+    # when gerrit_refspec is set without the project/branch the Gerrit
+    # checkout path also requires. The build-chain root job depends on
+    # this, so invalid inputs stop the pipeline early and cleanly. This
+    # job always runs (only the Gerrit step is conditional), so gating
+    # dependents on it does not trip GitHub's "skipped need skips
+    # dependents" behaviour.
     runs-on: ubuntu-latest
     permissions: {}
     timeout-minutes: 2
     steps:
+      # The suffix becomes part of artefact names, so only characters
+      # that are safe there pass.
+      - name: 'Validate artifact_suffix input'
+        shell: bash
+        env:
+          ARTIFACT_SUFFIX_INPUT: ${{ inputs.artifact_suffix }}
+        run: |
+          # Validate artifact_suffix input
+          if [[ ! "${ARTIFACT_SUFFIX_INPUT}" =~ ^[A-Za-z0-9._-]*$ ]]; then
+            echo "::error::Invalid artifact_suffix input:" \
+              "${ARTIFACT_SUFFIX_INPUT}"
+            exit 1
+          fi
+
       - name: 'Require Gerrit project, branch and URL'
         if: inputs.gerrit_refspec != ''
         shell: bash
@@ -514,7 +549,8 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: ${{ steps.build.outputs.artefact_name }}
+          # yamllint disable-line rule:line-length
+          name: ${{ steps.build.outputs.artefact_name }}${{ env.ARTIFACT_SUFFIX }}
           path: ${{ steps.build.outputs.artefact_path }}
           if-no-files-found: error
 
@@ -607,6 +643,13 @@ jobs:
     # yamllint disable-line rule:line-length
     if: ${{ !cancelled() && needs.build.result == 'success' && inputs.sbom_enabled }}
     timeout-minutes: 10
+    outputs:
+      # The grype job downloads by this ID, never by name: a caller
+      # running this workflow twice in one run without a distinct
+      # artifact_suffix uploads under one name, and a name lookup can
+      # hand that job the other call's SBOM. The ID makes it fail
+      # instead (see 'Explain SBOM download failure').
+      sbom_artifact_id: ${{ steps.sbom-upload.outputs.artifact-id }}
     permissions:
       contents: read
     steps:
@@ -679,10 +722,11 @@ jobs:
           echo "Wrote placeholder CycloneDX SBOM (0 components)"
 
       - name: 'Upload SBOM artifacts'
+        id: sbom-upload
         # yamllint disable-line rule:line-length
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
-          name: sbom-files
+          name: sbom-files${{ env.ARTIFACT_SUFFIX }}
           # Glob matches whichever SBOM formats the generator produced
           path: sbom-cyclonedx.*
           retention-days: 45
@@ -732,11 +776,47 @@ jobs:
           allowed-endpoints: >
             ${{ env.CONNECTION_ALLOW_LIST }}
 
+      # Without an ID (an upload that produced none) download-artifact
+      # would fall back to fetching every artefact in the run, so stop
+      # here with a clear cause instead.
+      - name: 'Check SBOM artefact ID'
+        shell: bash
+        env:
+          SBOM_ARTIFACT_ID: ${{ needs.sbom.outputs.sbom_artifact_id }}
+        run: |
+          # Check SBOM artefact ID
+          if [[ ! "${SBOM_ARTIFACT_ID}" =~ ^[0-9]+$ ]]; then
+            echo "::error::The sbom job exported no SBOM artefact ID;" \
+              "check its 'Upload SBOM artifacts' step"
+            exit 1
+          fi
+
+      # Bound to the sbom job's own upload by ID rather than by name,
+      # so a same-named artefact from another call of this workflow in
+      # the same run can never be the one scanned here. download-artifact
+      # matches IDs against the newest artefact of each name, so when a
+      # later call has uploaded an SBOM of the same name this download
+      # fails rather than scan the wrong one; a distinct artifact_suffix
+      # per call avoids that.
       - name: 'Download SBOM artefact'
+        id: sbom-download
         # yamllint disable-line rule:line-length
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          name: sbom-files
+          artifact-ids: ${{ needs.sbom.outputs.sbom_artifact_id }}
+
+      - name: 'Explain SBOM download failure'
+        if: failure() && steps.sbom-download.outcome == 'failure'
+        shell: bash
+        env:
+          SBOM_ARTIFACT_ID: ${{ needs.sbom.outputs.sbom_artifact_id }}
+        run: |
+          # Explain SBOM download failure
+          echo "::error::Could not download SBOM artefact" \
+            "${SBOM_ARTIFACT_ID} uploaded by the sbom job. Another call" \
+            "of this workflow in the same run may have uploaded an SBOM" \
+            "under the same name (give each call a distinct" \
+            "artifact_suffix), or the artefact expired or was deleted"
 
       # The grype_permit_fail input (or, when unset, the NO_BLOCK_AUDIT_FAIL
       # repository variable) disables failure propagation so pull requests
@@ -752,6 +832,7 @@ jobs:
           # yamllint disable-line rule:line-length
           permit-fail: ${{ inputs.grype_permit_fail || vars.NO_BLOCK_AUDIT_FAIL == 'true' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          artifact-name: 'grype-scan-results${{ env.ARTIFACT_SUFFIX }}'
 
   tests:
     name: 'Tests'
@@ -914,7 +995,8 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
-          name: ${{ needs.build.outputs.artefact_name }}
+          # yamllint disable-line rule:line-length
+          name: ${{ needs.build.outputs.artefact_name }}${{ env.ARTIFACT_SUFFIX }}
           path: ${{ needs.build.outputs.artefact_path }}
 
       - name: 'Attach build artefacts to release'
