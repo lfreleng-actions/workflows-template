@@ -189,3 +189,19 @@ repos:
         pass_filenames: false
         # yamllint disable-line rule:line-length
         files: '^(\.github/workflows/[^/]+\.ya?ml|tests/test-artifact-suffix\.sh)$'
+
+  # Grype gating policy check: every workflow running the scan exposes
+  # the grype_* policy inputs with the organisation's defaults,
+  # validates them in gerrit-validate and passes them through; a verify
+  # lane takes its dependency-change verdict from repository-metadata,
+  # guarded so a failed metadata job gates.
+  - repo: local
+    hooks:
+      - id: grype-policy-inputs
+        name: Grype gating policy wiring check
+        entry: bash tests/test-grype-policy-inputs.sh
+        language: python
+        additional_dependencies: ['pyyaml==6.0.2']
+        pass_filenames: false
+        # yamllint disable-line rule:line-length
+        files: '^(\.github/workflows/[^/]+\.ya?ml|tests/test-grype-policy-inputs\.sh)$'

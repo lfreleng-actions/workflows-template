@@ -68,6 +68,10 @@ jobs:
     #   audit_enabled: true           # false skips the dependency audit
     #   sbom_enabled: true            # false skips SBOM generation
     #   grype_enabled: true           # false skips the Grype scan only
+    #   grype_fail_on: 'medium'       # Grype severity gate
+    #   grype_only_fixed: true        # gate only on fixable findings
+    #   grype_dependency_policy: 'declared'  # or 'all'
+    #   grype_transitive_fail_on: 'critical' # inherited packages' gate
 
 # Caller-side registry publish jobs go here, stacked after the release
 # job, consuming `needs.release.outputs.tag` and the run-scoped build
