@@ -51,4 +51,9 @@ jobs:
     #   sbom_enabled: true            # false skips SBOM generation
     #   grype_enabled: true           # false skips the Grype scan only
     #   grype_fail_on: 'medium'       # Grype severity gate
+    #   grype_gate_when: 'always'     # or 'dependencies-changed'
+    #   grype_only_fixed: true        # gate only on fixable findings
+    #   grype_dependency_policy: 'declared'  # or 'all'
+    #   grype_transitive_fail_on: 'critical' # inherited packages' gate
+    #   grype_bypass_repository: ''   # owner/name of a shared bypass list
     #   harden_runner_egress: 'block' # 'block' (default) or 'audit'

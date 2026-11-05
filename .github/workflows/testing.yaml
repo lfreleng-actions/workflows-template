@@ -193,3 +193,131 @@ jobs:
       harden_runner_supplemental_allowlist: 'lfreleng-actions//'
       harden_runner_supplemental_unpinned: true
       harden_runner_extra_endpoints: 'github.com:443'
+
+  # Change-scoped Grype gating, end to end, in two lanes:
+  #
+  #   - unresolved: a fixture of another repository, pinned to a
+  #     commit, cannot share a base with this pull request, so
+  #     repository-metadata-action leaves the verdict empty; the
+  #     assertion proves that path gates (gate-active true);
+  #   - resolved: this repository itself, checked out at the commit
+  #     that triggered the run, so on a pull_request the verdict
+  #     resolves to 'true' or 'false' and must decide the gate. On
+  #     workflow_dispatch no base exists, the verdict stays empty and
+  #     the lane must gate like the unresolved one.
+  #
+  # The placeholder build and SBOM steps need no real project, so the
+  # resolved lane builds this repository. Each lane passes its own
+  # artifact_suffix, as every call here does.
+  build-test-gate-unresolved:
+    name: 'Build/Test (Grype gate, unresolved)'
+    permissions:
+      contents: read
+      pull-requests: read  # repository-metadata-action queries PR data
+    uses: $/.github/workflows/build-test.yaml
+    with:
+      repository: 'lfreleng-actions/test-go-project'
+      ref: '02a24ba15c4687eb443bf407b5fc0b4d099ab86f'  # v0.1.0
+      grype_gate_when: 'dependencies-changed'
+      artifact_suffix: 'gate-unresolved'
+
+  assert-gate-unresolved:
+    name: 'Assert Unresolved Verdict Gates'
+    needs: build-test-gate-unresolved
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 2
+    steps:
+      - name: 'Harden runner'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43  # v2.22.3
+        with:
+          egress-policy: 'audit'
+
+      - name: 'Check verdict and gate-active'
+        shell: bash
+        env:
+          # yamllint disable-line rule:line-length
+          GATE_ACTIVE: ${{ needs.build-test-gate-unresolved.outputs.grype_gate_active }}
+          # yamllint disable-line rule:line-length
+          VERDICT: ${{ needs.build-test-gate-unresolved.outputs.grype_dependencies_changed }}
+        run: |
+          # An unresolved verdict must arm the gate; anything else lets
+          # a change pass with the gate off although detection never ran
+          if [ -n "${VERDICT}" ]; then
+            echo "::error::grype_dependencies_changed is '${VERDICT}'," \
+              "expected empty for another repository's checkout"
+            exit 1
+          fi
+          if [ "${GATE_ACTIVE}" != 'true' ]; then
+            echo "::error::grype_gate_active is '${GATE_ACTIVE}'," \
+              "expected 'true' on the unresolved path"
+            exit 1
+          fi
+          echo "Unresolved verdict gates ✅"
+
+  # grype_permit_fail only stops a finding from failing the job; the
+  # gate is still decided first, and gate-active reports it.
+  build-test-gate-resolved:
+    name: 'Build/Test (Grype gate, resolved)'
+    permissions:
+      contents: read
+      pull-requests: read  # repository-metadata-action queries PR data
+    uses: $/.github/workflows/build-test.yaml
+    with:
+      grype_gate_when: 'dependencies-changed'
+      grype_permit_fail: true
+      artifact_suffix: 'gate-resolved'
+
+  assert-gate-resolved:
+    name: 'Assert Resolved Verdict Decides the Gate'
+    needs: build-test-gate-resolved
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 2
+    steps:
+      - name: 'Harden runner'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43  # v2.22.3
+        with:
+          egress-policy: 'audit'
+
+      - name: 'Check verdict and gate-active'
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # yamllint disable-line rule:line-length
+          GATE_ACTIVE: ${{ needs.build-test-gate-resolved.outputs.grype_gate_active }}
+          # yamllint disable-line rule:line-length
+          VERDICT: ${{ needs.build-test-gate-resolved.outputs.grype_dependencies_changed }}
+        run: |
+          echo "Event: ${EVENT_NAME}; verdict: '${VERDICT}';" \
+            "gate-active: '${GATE_ACTIVE}'"
+          if [ "${EVENT_NAME}" = 'pull_request' ]; then
+            # The base resolves here, so the verdict must be set and the
+            # gate must follow it
+            case "${VERDICT}" in
+              true|false) ;;
+              *)
+                echo "::error::grype_dependencies_changed is" \
+                  "'${VERDICT}', expected 'true' or 'false' on a pull" \
+                  "request of this repository"
+                exit 1
+                ;;
+            esac
+            if [ "${GATE_ACTIVE}" != "${VERDICT}" ]; then
+              echo "::error::grype_gate_active is '${GATE_ACTIVE}'," \
+                "expected '${VERDICT}' to follow the verdict"
+              exit 1
+            fi
+            echo "Resolved verdict '${VERDICT}' decides the gate ✅"
+          else
+            # No pull request base: the verdict stays empty and the gate
+            # must arm
+            if [ -n "${VERDICT}" ] || [ "${GATE_ACTIVE}" != 'true' ]; then
+              echo "::error::expected an empty verdict and gate-active" \
+                "'true' on ${EVENT_NAME}"
+              exit 1
+            fi
+            echo "Unresolved verdict on ${EVENT_NAME} gates ✅"
+          fi

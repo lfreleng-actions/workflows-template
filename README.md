@@ -139,6 +139,48 @@ scanning. The suffix is what lets every call in a run succeed.
 [`tests/test-artifact-suffix.sh`](tests/test-artifact-suffix.sh)
 checks this wiring; keep it when instantiating the template.
 
+## Grype gating policy
+
+`build-test.yaml` and `build-test-release.yaml` expose the Grype gating
+policy the workflow families adopted, with the same defaults, so a new
+family starts aligned.
+
+<!-- markdownlint-disable MD013 -->
+
+| Input | Default | Lanes | Effect |
+| ----- | ------- | ----- | ------ |
+| `grype_enabled` | `true` | both | `false` skips the scan; the SBOM stays |
+| `grype_fail_on` | `medium` | both | Lowest severity that gates; `none` reports without gating |
+| `grype_permit_fail` | `false` | both | Report findings without failing; else the `NO_BLOCK_AUDIT_FAIL` variable decides |
+| `grype_only_fixed` | `true` | both | Gate on a finding when a published fix version exists |
+| `grype_dependency_policy` | `declared` | both | `declared` gates direct dependencies; transitive ones meet `grype_transitive_fail_on` |
+| `grype_transitive_fail_on` | `critical` | both | Severity at which a transitive finding gates under `declared` |
+| `grype_bypass_repository` | `''` | both | Where approved `BYPASS:` issues live; empty is the calling repository |
+| `grype_gate_when` | `always` | build-test | `dependencies-changed` gates when the change touched a dependency file, and warns otherwise |
+| `grype_dependency_ecosystems` | `''` | build-test | Presets the detection checks; empty checks every preset |
+| `grype_dependency_patterns` | `''` | build-test | Extra dependency file patterns, one per line |
+| `grype_remediation_window_days` | `''` | build-test | Days a finding stays a warning on an unarmed run after its fix release |
+| `grype_remediation_window_start` | `''` | build-test | Optional `YYYY-MM-DD` floor on the window's clock |
+
+<!-- markdownlint-enable MD013 -->
+
+`build-test-release.yaml` always gates: a release passes
+`gate-when: always` whatever the change touched.
+
+With `grype_gate_when: dependencies-changed`, the `repository-metadata`
+job detects whether the change touched a dependency file, and the Grype
+job reads that verdict as a job output. The job runs no project code and
+checks out full history, or the Gerrit change at depth 2.
+[`repository-metadata-action`](https://github.com/lfreleng-actions/repository-metadata-action#dependency-change-detection)
+documents the detection rules, the files each preset covers and how it
+picks the base. Detection fails closed: an unresolved verdict, such as
+on a scheduled run, gates, and so does a failed or skipped metadata job.
+
+`gerrit-validate` checks every string input in seconds, before the
+build, and
+[`tests/test-grype-policy-inputs.sh`](tests/test-grype-policy-inputs.sh)
+checks the wiring; keep both when instantiating the template.
+
 ## GitHub CLI telemetry
 
 The release skeleton shells out to `gh`, which posts usage events to
@@ -312,7 +354,8 @@ When creating a new `<lang>-workflows` repository from this template:
    `harden_runner_egress: 'audit'` for bring-up/endpoint discovery.
    Keep the five `harden_runner_*` inputs and
    `tests/test-harden-runner-inputs.sh` as they are, so the check
-   stays the same across the organisation.
+   stays the same across the organisation. Keep the `grype_*` inputs,
+   their defaults and `tests/test-grype-policy-inputs.sh` likewise.
 5. Keep support for **both** release models (Model A and Model B),
    factoring version resolution so the two share building blocks.
 6. Update the `examples/` callers to reference your repository and its
@@ -343,8 +386,13 @@ supplemental list, and an inline endpoint that list already carries.
 The supplemental list follows `lfreleng-actions/.github` at its
 default branch, so that leg may allow hosts the pinned baseline does
 not yet; it proves the inputs reach the action, not the baseline.
-Each of the three calls passes its own `artifact_suffix`, so the run
-keeps every call's build, SBOM and Grype artefacts apart.
+Two further legs run the change-scoped Grype gate end to end. One
+targets a fixture of another repository, which cannot share a base with
+the pull request, and asserts that the empty verdict gates. The other
+builds this repository itself, so on a pull request its verdict
+resolves and must decide the gate. Each call passes its own
+`artifact_suffix`, so the run keeps every call's build, SBOM and Grype
+artefacts apart.
 
 [pre-commit.ci results page]: https://results.pre-commit.ci/latest/github/lfreleng-actions/workflows-template/main
 [pre-commit.ci status badge]: https://results.pre-commit.ci/badge/github/lfreleng-actions/workflows-template/main.svg
