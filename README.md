@@ -234,14 +234,6 @@ caller can move between them without relearning the inputs.
 
 <!-- markdownlint-enable MD013 -->
 
-[`tests/test-harden-runner-inputs.sh`](tests/test-harden-runner-inputs.sh)
-fails when a workflow drops one of these inputs, changes its type,
-default or description, passes it in another form, or lets a
-block-action step carry on past a missing named list. It names
-nothing specific to this repository, so an instantiated repository
-keeps it unchanged; the `harden-runner-inputs` hook in
-`.pre-commit-config.yaml` runs it whenever a workflow changes.
-
 ### A supplemental list of your own organisation
 
 The organisation list covers the hosts every project needs. A project
@@ -352,10 +344,9 @@ When creating a new `<lang>-workflows` repository from this template:
    `harden_runner_extra_endpoints` covers the wait for either change
    to land; see [Egress allow-list](#egress-allow-list). Reserve
    `harden_runner_egress: 'audit'` for bring-up/endpoint discovery.
-   Keep the five `harden_runner_*` inputs and
-   `tests/test-harden-runner-inputs.sh` as they are, so the check
-   stays the same across the organisation. Keep the `grype_*` inputs,
-   their defaults and `tests/test-grype-policy-inputs.sh` likewise.
+   Keep the five `harden_runner_*` inputs as they are. Keep the
+   `grype_*` inputs, their defaults and
+   `tests/test-grype-policy-inputs.sh` likewise.
 5. Keep support for **both** release models (Model A and Model B),
    factoring version resolution so the two share building blocks.
 6. Update the `examples/` callers to reference your repository and its
