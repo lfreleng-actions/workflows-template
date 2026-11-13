@@ -64,8 +64,8 @@ GRYPE = "lfreleng-actions/grype-scan-action"
 LEGACY_DETECTOR = "lfreleng-actions/dependency-change-action"
 LEGACY_SIDECAR = "dependency-change.json"
 METADATA = "lfreleng-actions/repository-metadata-action"
-# v0.4.0, the first release with dependency_change.
-METADATA_PIN = "18e5b7c5b16423b0e734891d103513826b324858"
+# v0.5.1; v0.4.0 was the first release with dependency_change.
+METADATA_PIN = "f0e5d2d8dc1154a5d702b75acc551eff6ba072dc"
 
 # name -> (type, default), for every lane that runs the scan.
 COMMON = {
