@@ -13,7 +13,9 @@
 # (one with grype_gate_when) must also take its dependency-change
 # verdict from the repository-metadata job, guarded so that a failed
 # or skipped metadata job gates. A release lane gates always. Every
-# repository-metadata-action call pins the same release. The detection
+# repository-metadata-action call pins a commit SHA, and the same one
+# in every workflow, so a bump that moves them together needs no edit
+# here but one that leaves a call behind fails. The detection
 # wiring the families retired must not come back: a
 # dependency-change-action step, its dependency-change.json sidecar,
 # or the scan's dependency-change-manifest input.
@@ -64,8 +66,7 @@ GRYPE = "lfreleng-actions/grype-scan-action"
 LEGACY_DETECTOR = "lfreleng-actions/dependency-change-action"
 LEGACY_SIDECAR = "dependency-change.json"
 METADATA = "lfreleng-actions/repository-metadata-action"
-# v0.5.1; v0.4.0 was the first release with dependency_change.
-METADATA_PIN = "f0e5d2d8dc1154a5d702b75acc551eff6ba072dc"
+COMMIT = re.compile(r"[0-9a-f]{40}")
 
 # name -> (type, default), for every lane that runs the scan.
 COMMON = {
@@ -264,8 +265,8 @@ def check_doc(doc):
         return []
     problems = []
     for _, where, _, uses in steps_using(doc, METADATA):
-        if uses.partition("@")[2] != METADATA_PIN:
-            problems.append(f"{where} does not pin {METADATA}@{METADATA_PIN}")
+        if not COMMIT.fullmatch(uses.partition("@")[2]):
+            problems.append(f"{where} does not pin {METADATA} to a commit SHA")
     scans = list(steps_using(doc, GRYPE))
     if not scans:
         return problems
@@ -334,19 +335,40 @@ def check_doc(doc):
     return problems
 
 
+def check_pins(docs):
+    """Return (name, problem) for every metadata call when the reusable
+    workflows in docs, (name, parsed workflow) pairs, pin more than one
+    commit."""
+    calls = [(name, where, uses.partition("@")[2])
+             for name, doc in docs if "workflow_call" in triggers(doc)
+             for _, where, _, uses in steps_using(doc, METADATA)]
+    pins = {pin for _, _, pin in calls}
+    if len(pins) < 2:
+        return []
+    return [(name, f"{where} pins {METADATA}@{pin}; the workflows pin"
+                   f" {len(pins)} different commits")
+            for name, where, pin in calls]
+
+
 def check_dir(path):
+    """Return the count of workflows that run the scan and the
+    (workflow, problem) pairs found, printing each problem."""
     checked = 0
-    failures = 0
+    docs = []
     for workflow in sorted(path.glob("*.y*ml")):
         doc = yaml.safe_load(workflow.read_text(encoding="utf-8"))
         if not isinstance(doc, dict):
             continue
+        docs.append((workflow, doc))
         if "workflow_call" in triggers(doc) and list(steps_using(doc, GRYPE)):
             checked += 1
-        for problem in check_doc(doc):
-            failures += 1
-            print(f"::error file={workflow}::{problem}")
-    return checked, failures
+    problems = [(workflow, problem)
+                for workflow, doc in docs for problem in check_doc(doc)]
+    problems += check_pins(docs)
+    problems.sort(key=lambda item: str(item[0]))
+    for workflow, problem in problems:
+        print(f"::error file={workflow}::{problem}")
+    return checked, problems
 
 
 def mutants(doc):
@@ -404,9 +426,9 @@ def mutants(doc):
     yield "grype if without !cancelled()", d
     d = copy.deepcopy(doc)
     for _, _, step, _ in steps_using(d, METADATA):
-        step["uses"] = f"{METADATA}@{'0' * 40}"
+        step["uses"] = f"{METADATA}@v0.5.4"
         break
-    yield "metadata pinned elsewhere", d
+    yield "metadata pinned to a tag", d
     d = copy.deepcopy(doc)
     d["jobs"]["sbom"]["steps"].append({
         "name": "Detect dependency changes",
@@ -469,17 +491,28 @@ def self_test(path):
             if not check_doc(yaml.safe_load(target.read_text())):
                 escaped += 1
                 print(f"::error::mutant not caught: {label}")
+    # A lone workflow cannot disagree with itself: re-pin a copy and
+    # check the pair.
+    total += 1
+    other = copy.deepcopy(doc)
+    for _, _, step, _ in steps_using(other, METADATA):
+        step["uses"] = f"{METADATA}@{'0' * 40}"
+        break
+    if not check_pins([("original", doc), ("copy", other)]):
+        escaped += 1
+        print("::error::mutant not caught: metadata pinned elsewhere")
     print(f"Mutants of {workflow.name} caught: {total - escaped}/{total}")
     return escaped
 
 
 root = pathlib.Path(sys.argv[1])
-checked, failures = check_dir(root)
+checked, problems = check_dir(root)
 if not checked:
     print(f"::error::no workflow_call workflow calls {GRYPE} in {root}")
     sys.exit(1)
-if failures:
-    print(f"{failures} problem(s) across {checked} workflow(s) ❌")
+if problems:
+    failing = len({workflow for workflow, _ in problems})
+    print(f"{len(problems)} problem(s) across {failing} workflow(s) ❌")
     sys.exit(1)
 print(f"{checked} workflow(s) wire the Grype policy ✅")
 if SKIPPED:
