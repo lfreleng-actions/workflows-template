@@ -2,19 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
-ci:
-  autofix_prs: false
-  # pre-commit.ci sandbox prevents network calls; disable gha-workflow-linter
-  skip: [gha-workflow-linter]
-  autofix_commit_msg: |
-    Chore: pre-commit autofixes
-
-    Signed-off-by: pre-commit-ci[bot] <pre-commit-ci@users.noreply.github.com>
-  autoupdate_commit_msg: |
-    Chore: pre-commit autoupdate
-
-    Signed-off-by: pre-commit-ci[bot] <pre-commit-ci@users.noreply.github.com>
-
 exclude: "^docs/conf.py"
 
 repos:
@@ -87,7 +74,7 @@ repos:
       - id: reuse
 
   # Replaces: https://github.com/rhysd/actionlint
-  # Permits actionlint to run both locally and with precommit.ci/GitHub
+  # Ships a prebuilt actionlint binary, so no Go toolchain is needed
   - repo: https://github.com/Mateusz-Grzelinski/actionlint-py
     rev: 357f7eec6dec49bf7693dc0dbec30212226d5492  # frozen: v1.7.12.25
     hooks:
